@@ -9,7 +9,7 @@
 
    Written by Becky Stewart 2022
 
-   POOPY FACE
+   POOPY BUM BUM
 */
 #include <Servo.h>
 
