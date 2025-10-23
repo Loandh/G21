@@ -1,0 +1,59 @@
+// Hue Viewer — click on object to read its HSV values
+
+import processing.video.*;
+
+Capture cam;
+
+void settings() {
+  size(640, 480);
+}
+
+void setup() {
+  cam = new Capture(this, 640, 480);
+  cam.start();
+  textAlign(LEFT, TOP);
+  textSize(14);
+}
+
+void captureEvent(Capture c) {
+  c.read();
+}
+
+void draw() {
+  image(cam, 0, 0);
+  fill(0, 150);
+  rect(0, 0, 200, 50);
+  fill(255);
+  text("Click a pixel to get HSV values", 10, 10);
+}
+
+void mousePressed() {
+  if (cam.width == 0) return;
+
+  // get the color under the mouse
+  color c = cam.get(mouseX, mouseY);
+  float r = red(c);
+  float g = green(c);
+  float b = blue(c);
+
+  float[] hsv = rgbToHsv(r, g, b);
+  println("Hue:", nf(hsv[0], 0, 1), "  Sat:", nf(hsv[1], 0, 2), "  Bright:", nf(hsv[2], 0, 2));
+}
+
+// Converts RGB to HSV; hue in degrees 0..360
+float[] rgbToHsv(float r, float g, float b) {
+  r /= 255; g /= 255; b /= 255;
+  float maxv = max(r, max(g, b));
+  float minv = min(r, min(g, b));
+  float h = 0, s, v = maxv;
+  float d = maxv - minv;
+  s = (maxv == 0) ? 0 : d / maxv;
+
+  if (d == 0) h = 0;
+  else if (maxv == r) h = 60 * (((g - b) / d) % 6);
+  else if (maxv == g) h = 60 * (((b - r) / d) + 2);
+  else h = 60 * (((r - g) / d) + 4);
+  if (h < 0) h += 360;
+
+  return new float[]{h, s, v};
+}
