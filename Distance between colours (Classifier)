@@ -1,6 +1,6 @@
 // needs tweaking for RGB ranges
 // very tempermental depending on lighting 
-// Wekinator: inputs = 5 , outputs = 2 (2 classes) - classifier 
+// Wekinator: inputs = 5 , outputs = 1 (2 classes)
 
 import processing.video.*;
 import oscP5.*;
