@@ -1,0 +1,34 @@
+const int buttonPin = 7;
+const int ledPins[] = {8,9,10};
+const int numLEDs = 3;
+
+bool lastButtonState = HIGH;
+bool LedOn = false;
+
+void setup(){
+  for (int i = 0; i < numLEDs; i++){
+    pinMode(ledPins[i], OUTPUT);
+    digitalWrite(ledPins[i], LOW);
+  }
+
+  pinMode(buttonPin, INPUT_PULLUP);
+
+  //randomSeed(analogRead(A0));
+
+}
+
+void loop(){
+  bool currentButtonState = digitalRead(buttonPin);
+
+  if (lastButtonState == HIGH && currentButtonState == LOW){
+
+    for (int i = 0; i <numLEDs; i++){
+      digitalWrite(ledPins[i], LOW);
+    }
+
+    int randomLED = random(0, numLEDs);
+
+    digitalWrite(ledPins[randomLED], HIGH);
+  }
+  lastButtonState = currentButtonState;
+}
