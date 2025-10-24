@@ -1,0 +1,45 @@
+// programmed for 3 LED's to be randomised when push button pressed
+
+const int buttonPin = 7;
+const int ledPins[] = {8, 9, 10};
+const int numLEDs = 3;
+
+int lastLit = -1;                     // tracks which LED is on
+bool lastButtonState = HIGH;          // using INPUT_PULLUP => idle HIGH
+unsigned long lastChange = 0;
+const unsigned long debounceMs = 30;
+
+void setup() {
+  for (int i = 0; i < numLEDs; i++) {
+    pinMode(ledPins[i], OUTPUT);
+    digitalWrite(ledPins[i], LOW);
+  }
+  pinMode(buttonPin, INPUT_PULLUP);
+  randomSeed(analogRead(A0));
+}
+
+void loop() {
+  bool reading = digitalRead(buttonPin);
+  unsigned long now = millis();
+
+  if (reading != lastButtonState && (now - lastChange) > debounceMs) {
+    lastChange = now;
+
+    if (lastButtonState == HIGH && reading == LOW) {
+      int next = lastLit;
+      if (numLEDs > 1) {
+        while (next == lastLit) {
+          next = random(0, numLEDs);
+        }
+      } else {
+        next = 0;
+      }
+
+      for (int i = 0; i < numLEDs; i++) digitalWrite(ledPins[i], LOW);
+      digitalWrite(ledPins[next], HIGH);
+
+      lastLit = next;
+    }
+    lastButtonState = reading;
+  }
+}
