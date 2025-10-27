@@ -1,0 +1,164 @@
+// needs tweaking for RGB ranges
+// very tempermental depending on lighting 
+// Wekinator: inputs = 1 , outputs = 1 (2 classes)
+
+import processing.video.*;
+import oscP5.*;
+import netP5.*;
+
+Capture cam;
+OscP5 oscP5;
+NetAddress wek;
+
+// ----- Display (pixelation) -----
+int viewW = 640, viewH = 480; // window size
+int videoW = 640, videoH = 480; // capture size
+int videoScale = 8; // pixel block size for display only
+
+// ----- Detection / smoothing -----
+PVector greenC = new PVector(-1,-1);
+PVector pinkC  = new PVector(-1,-1);
+PVector greenSm = new PVector(-1,-1);
+PVector pinkSm  = new PVector(-1,-1);
+PVector ballSm = new PVector(-1, -1);  // the smoothed position we’ll send to Wekinator
+boolean haveGreen=false, havePink=false;
+float emaAlpha = 0.35; // smoothing (0..1). Higher = snappier
+
+void settings(){
+    size(viewW, viewH);
+} 
+
+void setup() {
+
+  // List all available cameras
+  String[] cameras = Capture.list();
+
+  if (cameras == null || cameras.length == 0) {
+    println("No cameras found!");
+    exit();
+  }
+
+  println("Available cameras:");
+  for (int i = 0; i < cameras.length; i++) println(i + ": " + cameras[i]);
+  
+
+  // 👇 Pick your external webcam manually by its index (check console)
+  int camIndex = 1;  // <-- Change this after you see the printed list
+
+  // Initialize the chosen camera
+  cam = new Capture(this, cameras[camIndex]);
+  cam.start();
+  
+
+  oscP5 = new OscP5(this, 12000);           // local port (unused for send)
+  wek   = new NetAddress("127.0.0.1", 6448); // Wekinator default input
+
+  frameRate(30);
+}
+
+void captureEvent(Capture c){ c.read(); }
+
+void draw() {
+  background(0);
+  if (cam.available()) cam.read();
+
+  // --- 1) Pixelated display (for looks only) ---
+  drawPixelated(cam, videoScale);
+
+  // --- 2) Detect centroids (HSV thresholding) ---
+  haveGreen = findCentroidHSV(cam, /*hLo*/120, /*hHi*/135, /*s*/0.30, /*v*/0.18, greenC);
+  havePink  = findCentroidHSV(cam, 10, 30, 0.35, 0.20, pinkC);
+
+  // --- 3) Smooth the centroids (EMA) ---
+  if (haveGreen) ema(greenSm, greenC, emaAlpha);
+  if (havePink)  ema(pinkSm,  pinkC,  emaAlpha);
+
+boolean haveBall = false;
+if (haveGreen) { ballSm.set(greenSm); haveBall = true; }
+else if (havePink) { ballSm.set(pinkSm); haveBall = true; }
+
+if (haveBall){ 
+float xN = ballSm.x / cam.width;
+float yN = ballSm.y / cam.height;
+
+OscMessage m = new OscMessage("/wek/inputs");
+m.add(xN);
+m.add(yN);
+oscP5.send(m, wek); // wek is NetAddress("127.0.0.1", 6448)
+
+  // Draw markers (on the pixelated view)
+  noStroke();
+  if (haveGreen) { fill(0,255,255); ellipse(greenSm.x, greenSm.y, 12,12); }
+  if (havePink)  { fill(255,120,120); ellipse(pinkSm.x, pinkSm.y, 12,12); }
+  if (haveGreen && havePink) {
+    stroke(255); noFill(); line(greenSm.x, greenSm.y, pinkSm.x, pinkSm.y);
+  }
+}
+}
+
+// ---------- Helpers ----------
+
+// Pixelated display from a full-res frame
+void drawPixelated(PImage img, int block) {
+  img.loadPixels();
+  noStroke();
+  for (int y = 0; y < img.height; y += block) {
+    int sy = min(y + block/2, img.height - 1);
+    for (int x = 0; x < img.width; x += block) {
+      int sx = min(x + block/2, img.width - 1);
+      fill(img.pixels[sy*img.width + sx]);
+      rect(x, y, block, block);
+    }
+  }
+}
+
+// Find centroid for a non-wrapping hue band (e.g., blue)
+boolean findCentroidHSV(PImage img, float hLo, float hHi, float sMin, float vMin, PVector out) {
+  img.loadPixels();
+  float sx=0, sy=0; int n=0;
+  for (int y=0; y<img.height; y++) {
+    int base = y*img.width;
+    for (int x=0; x<img.width; x++) {
+      int c = img.pixels[base+x];
+      float[] hsv = rgbToHsv(red(c), green(c), blue(c));
+      if (hsv[0] >= hLo && hsv[0] <= hHi && hsv[1] > sMin && hsv[2] > vMin) {
+        sx += x; sy += y; n++;
+      }
+    }
+  }
+  if (n < 40) return false; // ignore tiny/noisy blobs
+  out.set(sx/n, sy/n);
+  return true;
+}
+
+// Simple exponential moving average
+void ema(PVector sm, PVector cur, float a) {
+  if (sm.x < 0 || sm.y < 0) { sm.set(cur); return; } // first time
+  sm.x = a*cur.x + (1-a)*sm.x;
+  sm.y = a*cur.y + (1-a)*sm.y;
+}
+
+// RGB -> HSV (h in degrees 0..360, s/v 0..1)
+float[] rgbToHsv(float r, float g, float b) {
+  r/=255; g/=255; b/=255;
+  float maxv = max(r, max(g, b)), minv = min(r, min(g, b));
+  float h=0, s, v=maxv, d=maxv-minv;
+  s = (maxv==0)? 0 : d/maxv;
+  if (d==0) h=0;
+  else if (maxv==r) h = 60 * (((g-b)/d) % 6);
+  else if (maxv==g) h = 60 * (((b-r)/d) + 2);
+  else               h = 60 * (((r-g)/d) + 4);
+  if (h < 0) h += 360;
+  return new float[]{h, s, v};
+}
+
+void oscEvent(OscMessage msg) {
+  if (msg.checkAddrPattern("/wek/outputs")) {
+    float cls = msg.get(0).floatValue(); // Wekinator sends class index as a float
+    int klass = int(cls);                 // typically 1 or 2
+    println("Predicted class:", klass);
+
+    // Use it: e.g., set a flag, change color, send to Arduino, etc.
+    // if (klass == 1) { ... } else { ... }
+  }
+}
