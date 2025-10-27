@@ -1,0 +1,34 @@
+import processing.video.*;
+
+Capture cam;
+
+void setup() {
+  size(640, 480);
+
+  // List all available cameras
+  String[] cameras = Capture.list();
+
+  if (cameras == null || cameras.length == 0) {
+    println("No cameras found!");
+    exit();
+  }
+
+  println("Available cameras:");
+  for (int i = 0; i < cameras.length; i++) {
+    println(i + ": " + cameras[i]);
+  }
+
+  // 👇 Pick your external webcam manually by its index (check console)
+  int camIndex = 1;  // <-- Change this after you see the printed list
+
+  // Initialize the chosen camera
+  cam = new Capture(this, cameras[camIndex]);
+  cam.start();
+}
+
+void draw() {
+  if (cam.available()) {
+    cam.read();
+  }
+  image(cam, 0, 0);
+}
