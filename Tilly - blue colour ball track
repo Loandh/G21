@@ -1,0 +1,101 @@
+// --- Libraries ---
+import processing.video.*;
+import oscP5.*;
+import netP5.*;
+
+// --- Webcam + OSC setup ---
+Capture cam;
+OscP5 oscP5;
+NetAddress wekinator;
+
+// --- Color settings ---
+color targetBlue = color(40, 80, 200); // Approximate blue (we'll refine it)
+float threshold = 70;                  // Color tolerance (increase if needed)
+
+// --- Tracked position ---
+float xPos = 0;
+float yPos = 0;
+
+void setup() {
+  size(640, 480);
+  // --- Initialize camera ---
+  String[] cameras = Capture.list();
+  if (cameras.length == 0) {
+    println("No cameras found!");
+    exit();
+  }
+  println("Using camera: " + cameras[0]);
+  cam = new Capture(this, cameras[0]);
+  cam.start();
+
+  // --- Initialize OSC ---
+  oscP5 = new OscP5(this, 12000); // Listening port (Wekinator output)
+  wekinator = new NetAddress("127.0.0.1", 6448); // Send inputs to Wekinator
+
+  println("Ready! Move your blue ball in view of the camera.");
+}
+
+void draw() {
+  if (cam.available()) cam.read();
+  image(cam, 0, 0);
+
+  // --- Track blue color ---
+  PVector bluePos = trackColor(targetBlue);
+
+  if (bluePos != null) {
+    fill(0, 0, 255);
+    noStroke();
+    ellipse(bluePos.x, bluePos.y, 25, 25);
+
+    // Normalize coordinates (0–1 for Wekinator)
+    xPos = bluePos.x / width;
+    yPos = bluePos.y / height;
+
+    // Send to Wekinator
+    OscMessage msg = new OscMessage("/wek/inputs");
+    msg.add(xPos);
+    msg.add(yPos);
+    oscP5.send(msg, wekinator);
+
+    fill(255);
+    text("x: " + nf(xPos, 1, 2) + " y: " + nf(yPos, 1, 2), 10, 20);
+  } else {
+    fill(255, 0, 0);
+    text("Blue ball not detected", 10, 20);
+  }
+}
+
+// --- Simple RGB color tracking ---
+PVector trackColor(color target) {
+  cam.loadPixels();
+  float avgX = 0;
+  float avgY = 0;
+  int count = 0;
+
+  for (int i = 0; i < cam.pixels.length; i++) {
+    color c = cam.pixels[i];
+    float d = dist(red(c), green(c), blue(c),
+                   red(target), green(target), blue(target));
+    if (d < threshold) {
+      avgX += i % cam.width;
+      avgY += i / cam.width;
+      count++;
+    }
+  }
+
+  if (count > 0) {
+    avgX /= count;
+    avgY /= count;
+    return new PVector(avgX, avgY);
+  } else {
+    return null;
+  }
+}
+
+// --- Click on camera to sample color ---
+void mousePressed() {
+  if (cam.width == 0) return;
+  color clicked = cam.get(mouseX, mouseY);
+  targetBlue = clicked;
+  println("Sampled blue color = (" + red(clicked) + ", " + green(clicked) + ", " + blue(clicked) + ")");
+}
