@@ -9,12 +9,16 @@ OscP5 oscP5;
 NetAddress wekinator;
 
 // --- Color settings ---
-color targetBlue = color(40, 80, 200); // Approximate blue (we'll refine it)
+color targetBlue = color(40, 80, 200);  // Approximate blue (we'll refine it)
+color targetRed = color(140,10,45);     // Appox red 
 float threshold = 70;                  // Color tolerance (increase if needed)
 
 // --- Tracked position ---
-float xPos = 0;
-float yPos = 0;
+float xPosBlue = 0;
+float yPosBlue = 0;
+
+float xPosRed = 0;
+float yPosRed = 0;
 
 void setup() {
   size(640, 480);
@@ -41,6 +45,7 @@ void draw() {
 
   // --- Track blue color ---
   PVector bluePos = trackColor(targetBlue);
+ 
 
   if (bluePos != null) {
     fill(0, 0, 255);
@@ -48,17 +53,17 @@ void draw() {
     ellipse(bluePos.x, bluePos.y, 25, 25);
 
     // Normalize coordinates (0–1 for Wekinator)
-    xPos = bluePos.x / width;
-    yPos = bluePos.y / height;
+    xPosBlue = bluePos.x / width;
+    yPosBlue = bluePos.y / height;
 
     // Send to Wekinator
     OscMessage msg = new OscMessage("/wek/inputs");
-    msg.add(xPos);
-    msg.add(yPos);
+    msg.add(xPosBlue);
+    msg.add(yPosBlue);
     oscP5.send(msg, wekinator);
 
     fill(255);
-    text("x: " + nf(xPos, 1, 2) + " y: " + nf(yPos, 1, 2), 10, 20);
+    text("x: " + nf(xPosBlue, 1, 2) + " y: " + nf(yPosBlue, 1, 2), 10, 20);
   } else {
     fill(255, 0, 0);
     text("Blue ball not detected", 10, 20);
