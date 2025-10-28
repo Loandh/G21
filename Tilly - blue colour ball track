@@ -8,75 +8,98 @@ Capture cam;
 OscP5 oscP5;
 NetAddress wekinator;
 
-// --- Color settings ---
-color targetBlue = color(40, 80, 200);  // Approximate blue (we'll refine it)
-color targetRed = color(140,10,45);     // Appox red 
-float threshold = 70;                  // Color tolerance (increase if needed)
+// --- Target colors (you can click to resample) ---
+color targetBlue = color(10, 40, 130);
+color targetRed  = color(180, 20, 30);
+float threshold = 70; // tolerance (increase if lighting varies)
 
-// --- Tracked position ---
-float xPosBlue = 0;
-float yPosBlue = 0;
-
-float xPosRed = 0;
-float yPosRed = 0;
+// --- Positions ---
+float blueX = 0, blueY = 0;
+float redX = 0, redY = 0;
 
 void setup() {
   size(640, 480);
-  // --- Initialize camera ---
+
+  // List all available cameras
   String[] cameras = Capture.list();
-  if (cameras.length == 0) {
+
+  if (cameras == null || cameras.length == 0) {
     println("No cameras found!");
     exit();
   }
-  println("Using camera: " + cameras[0]);
-  cam = new Capture(this, cameras[0]);
+
+  println("Available cameras:");
+  for (int i = 0; i < cameras.length; i++) {
+    println(i + ": " + cameras[i]);
+  }
+
+  // Pick your external webcam manually by its index (check console)
+  int camIndex = 1;  // <-- Change this after you see the printed list
+
+  // Initialize the chosen camera
+  cam = new Capture(this, cameras[camIndex]);
   cam.start();
-
-  // --- Initialize OSC ---
-  oscP5 = new OscP5(this, 12000); // Listening port (Wekinator output)
-  wekinator = new NetAddress("127.0.0.1", 6448); // Send inputs to Wekinator
-
-  println("Ready! Move your blue ball in view of the camera.");
+  
+  // --- OSC setup ---
+  oscP5 = new OscP5(this, 12000); // receive from Wekinator if needed
+  wekinator = new NetAddress("127.0.0.1", 6448); // send to Wekinator
+  
+  println("Tracking blue and red balls...");
 }
 
 void draw() {
   if (cam.available()) cam.read();
   image(cam, 0, 0);
-
-  // --- Track blue color ---
+  
+  // --- Track both colors ---
   PVector bluePos = trackColor(targetBlue);
- 
+  PVector redPos  = trackColor(targetRed);
 
+  // --- Draw + normalize blue ball ---
   if (bluePos != null) {
     fill(0, 0, 255);
     noStroke();
     ellipse(bluePos.x, bluePos.y, 25, 25);
-
-    // Normalize coordinates (0–1 for Wekinator)
-    xPosBlue = bluePos.x / width;
-    yPosBlue = bluePos.y / height;
-
-    // Send to Wekinator
-    OscMessage msg = new OscMessage("/wek/inputs");
-    msg.add(xPosBlue);
-    msg.add(yPosBlue);
-    oscP5.send(msg, wekinator);
-
-    fill(255);
-    text("x: " + nf(xPosBlue, 1, 2) + " y: " + nf(yPosBlue, 1, 2), 10, 20);
+    blueX = bluePos.x / width;
+    blueY = bluePos.y / height;
   } else {
     fill(255, 0, 0);
-    text("Blue ball not detected", 10, 20);
+    text("Blue not found", 10, 20);
   }
+
+  // --- Draw + normalize red ball ---
+  if (redPos != null) {
+    fill(255, 0, 0);
+    noStroke();
+    ellipse(redPos.x, redPos.y, 25, 25);
+    redX = redPos.x / width;
+    redY = redPos.y / height;
+  } else {
+    fill(255, 0, 0);
+    text("Red not found", 10, 40);
+  }
+
+  // --- Send to Wekinator ---
+  OscMessage msg = new OscMessage("/wek/inputs");
+  msg.add(blueX);
+  msg.add(blueY);
+  msg.add(redX);
+  msg.add(redY);
+  oscP5.send(msg, wekinator);
+
+  // --- Display coordinates on screen ---
+  fill(255);
+  textSize(14);
+  text("Blue: " + nf(blueX, 1, 2) + ", " + nf(blueY, 1, 2), 10, height - 40);
+  text("Red:  " + nf(redX, 1, 2) + ", " + nf(redY, 1, 2), 10, height - 20);
 }
 
-// --- Simple RGB color tracking ---
+// --- Color tracking function (RGB distance) ---
 PVector trackColor(color target) {
   cam.loadPixels();
-  float avgX = 0;
-  float avgY = 0;
+  float avgX = 0, avgY = 0;
   int count = 0;
-
+  
   for (int i = 0; i < cam.pixels.length; i++) {
     color c = cam.pixels[i];
     float d = dist(red(c), green(c), blue(c),
@@ -97,10 +120,16 @@ PVector trackColor(color target) {
   }
 }
 
-// --- Click on camera to sample color ---
+// --- Click to sample color dynamically ---
 void mousePressed() {
   if (cam.width == 0) return;
   color clicked = cam.get(mouseX, mouseY);
-  targetBlue = clicked;
-  println("Sampled blue color = (" + red(clicked) + ", " + green(clicked) + ", " + blue(clicked) + ")");
+  
+  if (mouseButton == LEFT) {
+    targetBlue = clicked;
+    println("Sampled blue color = (" + red(clicked) + ", " + green(clicked) + ", " + blue(clicked) + ")");
+  } else if (mouseButton == RIGHT) {
+    targetRed = clicked;
+    println("Sampled red color = (" + red(clicked) + ", " + green(clicked) + ", " + blue(clicked) + ")");
+  }
 }
