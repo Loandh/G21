@@ -1,24 +1,33 @@
-// --- Libraries ---
 import processing.video.*;
 import oscP5.*;
 import netP5.*;
 
-// --- Webcam + OSC setup ---
 Capture cam;
 OscP5 oscP5;
 NetAddress wekinator;
 
-// --- Target colors (you can click to resample) ---
-color targetBlue = color(10, 40, 130);
-color targetRed  = color(180, 20, 30);
-float threshold = 70; // tolerance (increase if lighting varies)
-
-// --- Positions ---
 float blueX = 0, blueY = 0;
+float greenX = 0, greenY = 0;
 float redX = 0, redY = 0;
 
+
+boolean blueDetected = false;
+boolean greenDetected = false;
+boolean redDetected = false;
+
+// HSV thresholds (adjust as needed)
+float blueHueMin = 160, blueHueMax = 210;
+
+float greenHueMin = 85, greenHueMax = 140;
+
+float redHueMin1 = 0, redHueMax1 = 15;
+float redHueMin2 = 230, redHueMax2 = 255;
+
+float satMin = 80;   // filter out gray
+float valMin = 40;   // filter out dark pixels
+
 void setup() {
-  size(640, 480);
+   size(640, 480);
 
   // List all available cameras
   String[] cameras = Capture.list();
@@ -33,81 +42,115 @@ void setup() {
     println(i + ": " + cameras[i]);
   }
 
-  // Pick your external webcam manually by its index (check console)
+  //Pick your external webcam manually by its index (check console)
   int camIndex = 1;  // <-- Change this after you see the printed list
 
   // Initialize the chosen camera
   cam = new Capture(this, cameras[camIndex]);
   cam.start();
-  
-  // --- OSC setup ---
-  oscP5 = new OscP5(this, 12000); // receive from Wekinator if needed
-  wekinator = new NetAddress("127.0.0.1", 6448); // send to Wekinator
-  
-  println("Tracking blue and red balls...");
+
+  oscP5 = new OscP5(this, 12000);
+  wekinator = new NetAddress("127.0.0.1", 6448);
 }
 
 void draw() {
   if (cam.available()) cam.read();
   image(cam, 0, 0);
-  
-  // --- Track both colors ---
-  PVector bluePos = trackColor(targetBlue);
-  PVector redPos  = trackColor(targetRed);
 
-  // --- Draw + normalize blue ball ---
+  PVector bluePos = trackColorHSV(blueHueMin, blueHueMax);
+  PVector greenPos = trackColorHSV(greenHueMin, greenHueMax);
+  PVector redPos = trackColorHSV(redHueMin1, redHueMax1);
+
   if (bluePos != null) {
+    blueDetected = true;
     fill(0, 0, 255);
     noStroke();
     ellipse(bluePos.x, bluePos.y, 25, 25);
     blueX = bluePos.x / width;
     blueY = bluePos.y / height;
   } else {
-    fill(255, 0, 0);
-    text("Blue not found", 10, 20);
+    blueDetected = false;
+    blueX = 0;
+    blueY = 0;
   }
 
-  // --- Draw + normalize red ball ---
+  if (greenPos != null) {
+    greenDetected = true;
+    fill(0, 255, 0);
+    noStroke();
+    ellipse(greenPos.x, greenPos.y, 25, 25);
+    greenX = greenPos.x / width;
+    greenY = greenPos.y / height;
+  } else {
+    greenDetected = false;
+    greenX = 0;
+    greenY = 0;
+  }
+  
   if (redPos != null) {
+    redDetected = true;
     fill(255, 0, 0);
     noStroke();
     ellipse(redPos.x, redPos.y, 25, 25);
     redX = redPos.x / width;
     redY = redPos.y / height;
   } else {
-    fill(255, 0, 0);
-    text("Red not found", 10, 40);
+    redDetected = false;
+    redX = 0;
+    redY = 0;
   }
 
-  // --- Send to Wekinator ---
+  // --- Send OSC message to Wekinator ---
   OscMessage msg = new OscMessage("/wek/inputs");
   msg.add(blueX);
   msg.add(blueY);
+  //msg.add(blueDetected ? 1 : 0);
+  msg.add(greenX);
+  msg.add(greenY);
+  //msg.add(greenDetected ? 1 : 0);
   msg.add(redX);
   msg.add(redY);
+ // msg.add(redDetected ? 1 : 0);
   oscP5.send(msg, wekinator);
+  
 
-  // --- Display coordinates on screen ---
+  // --- Debug info ---
   fill(255);
   textSize(14);
-  text("Blue: " + nf(blueX, 1, 2) + ", " + nf(blueY, 1, 2), 10, height - 40);
-  text("Red:  " + nf(redX, 1, 2) + ", " + nf(redY, 1, 2), 10, height - 20);
+  text("Blue detected: " + blueDetected, 10, height - 60);
+  text("Green detected: " + greenDetected, 10, height - 40);
+  text("Red detected: " + redDetected, 10, height);
+  
+  text("Blue (x, y): " + nf(blueX, 1, 2) + ", " + nf(blueY, 1, 2), 10, height - 20);
+  text("Green (x, y): " + nf(greenX, 1, 2) + ", " + nf(greenY, 1, 2), 10, height - 5);
+  text("Red (x,y): " + nf(redX, 1, 2) + ", " + nf(redY, 1, 2), 10, height);
 }
 
-// --- Color tracking function (RGB distance) ---
-PVector trackColor(color target) {
+// --- HSV tracking function ---
+PVector trackColorHSV(float hueMin, float hueMax) {
   cam.loadPixels();
   float avgX = 0, avgY = 0;
   int count = 0;
-  
+
   for (int i = 0; i < cam.pixels.length; i++) {
     color c = cam.pixels[i];
-    float d = dist(red(c), green(c), blue(c),
-                   red(target), green(target), blue(target));
-    if (d < threshold) {
-      avgX += i % cam.width;
-      avgY += i / cam.width;
-      count++;
+    float h = hue(c);
+    float s = saturation(c);
+    float v = brightness(c);
+
+    if (hueMin < hueMax) {
+      if (h >= hueMin && h <= hueMax && s > satMin && v > valMin) {
+        avgX += i % cam.width;
+        avgY += i / cam.width;
+        count++;
+      }
+    } else {
+      // handle hue wrap-around (e.g., red)
+      if ((h >= hueMin || h <= hueMax) && s > satMin && v > valMin) {
+        avgX += i % cam.width;
+        avgY += i / cam.width;
+        count++;
+      }
     }
   }
 
@@ -117,19 +160,5 @@ PVector trackColor(color target) {
     return new PVector(avgX, avgY);
   } else {
     return null;
-  }
-}
-
-// --- Click to sample color dynamically ---
-void mousePressed() {
-  if (cam.width == 0) return;
-  color clicked = cam.get(mouseX, mouseY);
-  
-  if (mouseButton == LEFT) {
-    targetBlue = clicked;
-    println("Sampled blue color = (" + red(clicked) + ", " + green(clicked) + ", " + blue(clicked) + ")");
-  } else if (mouseButton == RIGHT) {
-    targetRed = clicked;
-    println("Sampled red color = (" + red(clicked) + ", " + green(clicked) + ", " + blue(clicked) + ")");
   }
 }
