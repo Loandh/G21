@@ -1,0 +1,250 @@
+import processing.video.*;
+import oscP5.*;
+import netP5.*;
+
+Capture cam;
+OscP5 oscP5;
+NetAddress wekinator;
+
+float blueX = 0, blueY = 0;
+float greenX = 0, greenY = 0;
+float redX = 0, redY = 0;
+
+float lastBlueX = 0, lastBlueY = 0;
+float lastGreenX = 0, lastGreenY = 0;
+float lastRedX = 0, lastRedY = 0;
+
+boolean blueDetected = false;
+boolean greenDetected = false;
+boolean redDetected = false;
+
+// HSV thresholds (adjust if needed)
+float blueHueMin = 160, blueHueMax = 210;
+float greenHueMin = 85, greenHueMax = 140;
+float redHueMin1 = 0, redHueMax1 = 15;    // primary red range
+float redHueMin2 = 230, redHueMax2 = 255; // wrap-around red range
+
+float satMin = 80;   // filter out gray
+float valMin = 40;   // filter out dark pixels
+
+// Movement detection
+float movementThreshold = 0.01;   // normalized movement threshold (0..1)
+int stillTimeThreshold = 500;     // ms that scene must be still before sending
+int lastMoveTime = 0;             // timestamp of last detected movement
+
+boolean messageSent = false;      // prevent repeated sends until movement resumes
+
+void setup() {
+  size(640, 480);
+  String[] cameras = Capture.list();
+  if (cameras == null || cameras.length == 0) {
+    println("No cameras found!");
+    exit();
+  }
+
+  println("Available cameras:");
+  for (int i = 0; i < cameras.length; i++) {
+    println(i + ": " + cameras[i]);
+  }
+
+  int camIndex = 1; // change if your external webcam index is different
+  if (camIndex < 0 || camIndex >= cameras.length) camIndex = 0;
+  cam = new Capture(this, cameras[camIndex]);
+  cam.start();
+
+  oscP5 = new OscP5(this, 12000);
+  wekinator = new NetAddress("127.0.0.1", 6448);
+
+  // initialize last positions so first frame isn't treated as movement
+  lastBlueX = lastBlueY = lastGreenX = lastGreenY = lastRedX = lastRedY = 0;
+  lastMoveTime = millis();
+}
+
+void draw() {
+  if (cam.available()) cam.read();
+  image(cam, 0, 0);
+
+  // Detect positions (PVector or null)
+  PVector bluePos = trackColorHSV(blueHueMin, blueHueMax);
+  PVector greenPos = trackColorHSV(greenHueMin, greenHueMax);
+  PVector redPos = trackRedHSV(); // red needs dual-range handling
+
+  // Update positions and draw
+  updateBallPosition("blue", bluePos);
+  updateBallPosition("green", greenPos);
+  updateBallPosition("red", redPos);
+
+  // Compute normalized movement distances (Euclidean)
+  float blueMove = dist(blueX, blueY, lastBlueX, lastBlueY);
+  float greenMove = dist(greenX, greenY, lastGreenX, lastGreenY);
+  float redMove = dist(redX, redY, lastRedX, lastRedY);
+
+  boolean isMoving = (blueMove > movementThreshold ||
+                      greenMove > movementThreshold ||
+                      redMove > movementThreshold);
+
+  if (isMoving) {
+    lastMoveTime = millis();
+    messageSent = false; // allow another send after movement stops
+  }
+
+  // Send once everything stayed still long enough
+  if (millis() - lastMoveTime > stillTimeThreshold && !messageSent) {
+    sendToWekinator();
+    messageSent = true;
+  }
+
+  // Draw debug info
+  fill(255);
+  textSize(14);
+  textAlign(LEFT, BASELINE);
+  text("Blue detected: " + blueDetected, 10, height - 80);
+  text("Green detected: " + greenDetected, 10, height - 60);
+  text("Red detected: " + redDetected, 10, height - 40);
+
+  text("Blue (x,y): " + nf(blueX, 1, 2) + ", " + nf(blueY, 1, 2), 10, height - 20);
+  text("Green (x,y): " + nf(greenX, 1, 2) + ", " + nf(greenY, 1, 2), 220, height - 20);
+  text("Red (x,y): " + nf(redX, 1, 2) + ", " + nf(redY, 1, 2), 430, height - 20);
+
+  text("Moving: " + isMoving + "  (threshold=" + nf(movementThreshold,1,3) + ")", 10, 20);
+  if (messageSent) text("OSC SENT (balls still)", 10, 40);
+}
+
+// ---------------------------
+// updateBallPosition: sets lastPos, currentPos and draws marker
+// ---------------------------
+void updateBallPosition(String colorName, PVector pos) {
+  if (colorName == null) return;
+
+  // BLUE
+  if (colorName.equals("blue")) {
+    lastBlueX = blueX;
+    lastBlueY = blueY;
+    if (pos != null) {
+      blueDetected = true;
+      fill(0, 0, 255);
+      noStroke();
+      ellipse(pos.x, pos.y, 25, 25);
+      blueX = pos.x / width;
+      blueY = pos.y / height;
+    } else {
+      blueDetected = false;
+      blueX = 0;
+      blueY = 0;
+    }
+    return;
+  }
+
+  // GREEN
+  if (colorName.equals("green")) {
+    lastGreenX = greenX;
+    lastGreenY = greenY;
+    if (pos != null) {
+      greenDetected = true;
+      fill(0, 255, 0);
+      noStroke();
+      ellipse(pos.x, pos.y, 25, 25);
+      greenX = pos.x / width;
+      greenY = pos.y / height;
+    } else {
+      greenDetected = false;
+      greenX = 0;
+      greenY = 0;
+    }
+    return;
+  }
+
+  // RED
+  if (colorName.equals("red")) {
+    lastRedX = redX;
+    lastRedY = redY;
+    if (pos != null) {
+      redDetected = true;
+      fill(255, 0, 0);
+      noStroke();
+      ellipse(pos.x, pos.y, 25, 25);
+      redX = pos.x / width;
+      redY = pos.y / height;
+    } else {
+      redDetected = false;
+      redX = 0;
+      redY = 0;
+    }
+    return;
+  }
+}
+
+// ---------------------------
+// sendToWekinator: sends normalized coords for all 3 balls
+// ---------------------------
+void sendToWekinator() {
+  OscMessage msg = new OscMessage("/wek/inputs");
+  msg.add(blueX);
+  msg.add(blueY);
+  msg.add(greenX);
+  msg.add(greenY);
+  msg.add(redX);
+  msg.add(redY);
+  oscP5.send(msg, wekinator);
+  println("🟢 Sent OSC to Wekinator (balls still)");
+}
+
+// ---------------------------
+// HSV tracker for non-wrap ranges (blue, green)
+// ---------------------------
+PVector trackColorHSV(float hueMin, float hueMax) {
+  cam.loadPixels();
+  float avgX = 0, avgY = 0;
+  int count = 0;
+
+  for (int i = 0; i < cam.pixels.length; i++) {
+    color c = cam.pixels[i];
+    float h = hue(c);
+    float s = saturation(c);
+    float v = brightness(c);
+
+    boolean match = false;
+    if (hueMin < hueMax) {
+      match = (h >= hueMin && h <= hueMax);
+    } else {
+      // should not happen here for blue/green, but keep safe
+      match = (h >= hueMin || h <= hueMax);
+    }
+
+    if (match && s > satMin && v > valMin) {
+      avgX += i % cam.width;
+      avgY += i / cam.width;
+      count++;
+    }
+  }
+
+  if (count > 0) return new PVector(avgX / count, avgY / count);
+  else return null;
+}
+
+// ---------------------------
+// Special red tracker (handles wrap-around ranges)
+// ---------------------------
+PVector trackRedHSV() {
+  cam.loadPixels();
+  float avgX = 0, avgY = 0;
+  int count = 0;
+
+  for (int i = 0; i < cam.pixels.length; i++) {
+    color c = cam.pixels[i];
+    float h = hue(c);
+    float s = saturation(c);
+    float v = brightness(c);
+
+    boolean inRange1 = (h >= redHueMin1 && h <= redHueMax1);
+    boolean inRange2 = (h >= redHueMin2 && h <= redHueMax2);
+    if ((inRange1 || inRange2) && s > satMin && v > valMin) {
+      avgX += i % cam.width;
+      avgY += i / cam.width;
+      count++;
+    }
+  }
+
+  if (count > 0) return new PVector(avgX / count, avgY / count);
+  else return null;
+}
