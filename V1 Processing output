@@ -1,0 +1,57 @@
+import processing.serial.*;
+import oscP5.*;
+import netP5.*;
+
+Serial myPort;     // Arduino serial port
+OscP5 oscP5;       // existing OSC listener
+
+String lastCmd = "";
+
+
+void setup (){ 
+  printArray(Serial.list());  // See available COM ports
+myPort = new Serial(this, Serial.list()[0], 9600); // Adjust index if needed
+
+// Listen for Wekinator outputs on port 12000
+oscP5 = new OscP5(this, 12000);
+
+// Open Arduino serial (pick the right port index from the printed list)
+printArray(Serial.list());
+myPort = new Serial(this, Serial.list()[0], 9600);   // change [0] if needed
+}
+
+void oscEvent(OscMessage msg) {
+  if (msg.checkAddrPattern("/wek/outputs")) {
+    float cls = msg.get(0).floatValue();   // Wekinator sends class number (1 or 2)
+    println("Predicted class: " + cls);
+    handleGameState(int(cls));             // Call function to act on it
+  }
+}
+
+void handleGameState(int cls) {
+  if (cls == 1) {
+    println("Class 1 → Restart game, pick new target");
+    myPort.write("RST\n");  // Arduino command to restart
+  } 
+  else if (cls == 2) {
+    println("Class 2 → Robot can throw now");
+    myPort.write("THR\n");  // Arduino command to throw
+  }
+}
+
+if (cls == 2) {
+  boolean sameBox = checkIfSameBox(blueX, blueY, greenX, greenY);
+  if (sameBox) {
+    myPort.write("CHEAT\n"); // Robot cheats
+  } else {
+    myPort.write("WIN\n");   // Robot celebrates
+  }
+}
+
+if (Serial.available()) {
+  String cmd = Serial.readStringUntil('\n');
+  if (cmd == "RST") { /* move servo to reset position */ }
+  else if (cmd == "THR") { /* perform throw */ }
+  else if (cmd == "CHEAT") { /* move to cheat target */ }
+  else if (cmd == "WIN") { /* play victory */ }
+}
