@@ -1,0 +1,194 @@
+// Processing 4.x
+// Libraries needed: oscP5, netP5, processing.serial
+
+import oscP5.*;
+import netP5.*;
+import processing.serial.*;
+
+Serial myPort;
+OscP5  oscP5;
+
+// ----- Wekinator 4-output model -----
+// /wek/outputs -> [ state2, red16, green16, blue16 ]
+// state2: 1=LED & NO green; 2=LED & green.
+int gameState    = 0;   // 1 or 2
+int redCell      = 0;   // 1..16 (0 = unseen)
+int greenCell    = 0;   // 1..16 (0 = unseen)
+int blueCell     = 0;   // 1..16 (0 = unseen)
+
+// ----- Board (shared 16-grid) -----
+final int COLS = 4;
+final int ROWS = 4;
+
+// ----- Game phases -----
+enum Phase { IDLE, WAIT_GREEN_THROWN, WAIT_BLUE_THROWN, EVALUATE, DONE }
+Phase phase = Phase.IDLE;
+
+// last command guard
+String lastCmd = "";
+
+// ----- Optional stillness gate for "15 seconds of no change" -----
+int    stillSecondsNeeded = 15;
+float  lastChangeTime     = 0;
+boolean isStillEnough     = false;
+
+// track last observed tuple for stillness
+int last_state= -1, last_red= -1, last_green= -1, last_blue= -1;
+
+void setup() {
+  size(720, 480);
+  // Serial
+  printArray(Serial.list());
+  myPort = new Serial(this, Serial.list()[0], 9600); // change index as needed
+  myPort.clear();
+  myPort.bufferUntil('\n');
+
+  // OSC
+  oscP5 = new OscP5(this, 12000);
+
+  enterIdle();
+  println("Ready for 4-output Wekinator: [state2, red16, green16, blue16]");
+}
+
+void draw() {
+  background(250);
+  fill(0);
+  text("Phase: " + phase, 10, 20);
+  text("State2: " + gameState + "   red:" + redCell + "  green:" + greenCell + "  blue:" + blueCell, 10, 40);
+  text("Still≥" + stillSecondsNeeded + "s? " + isStillEnough, 10, 60);
+  text("lastCmd: " + lastCmd, 10, 80);
+
+  // state machine
+  switch (phase) {
+    case IDLE:
+    case WAIT_GREEN_THROWN:
+      // Waiting for state2==2 (green ball present) to allow robot throw
+      break;
+
+    case WAIT_BLUE_THROWN:
+      // We move on once blueCell becomes a valid bin (1..16).
+      if (blueCell >= 1 && blueCell <= 16) {
+        phase = Phase.EVALUATE;
+      }
+      break;
+
+    case EVALUATE:
+      evaluateBlueVsTarget();
+      break;
+
+    case DONE:
+      // Await next restart (state2==1 with stillness)
+      break;
+  }
+}
+
+// ---------------- OSC: receive 4 outputs ----------------
+void oscEvent(OscMessage m) {
+  if (!m.checkAddrPattern("/wek/outputs")) return;
+  if (m.typetag().length() < 4) return; // guard
+
+  // Wekinator sends floats; cast to ints
+  int state2 = constrain(int(m.get(0).floatValue()), 0, 2);   // 0,1,2
+  int r16    = constrain(int(m.get(1).floatValue()), 0, 16);  // 0..16
+  int g16    = constrain(int(m.get(2).floatValue()), 0, 16);
+  int b16    = constrain(int(m.get(3).floatValue()), 0, 16);
+
+  // Update stillness timer if anything changed
+  if (state2 != last_state || r16 != last_red || g16 != last_green || b16 != last_blue) {
+    lastChangeTime = millis();
+    isStillEnough  = false;
+    last_state = state2; last_red = r16; last_green = g16; last_blue = b16;
+  } else {
+    if (!isStillEnough && millis() - lastChangeTime >= stillSecondsNeeded * 1000.0) {
+      isStillEnough = true;
+    }
+  }
+
+  // Commit values after stillness calculation
+  gameState = state2;
+  redCell   = r16;
+  greenCell = g16;
+  blueCell  = b16;
+
+  // ---------- Flowchart mapping ----------
+  // Q1: "Is there no green on the board?"  == state2==1
+  if (gameState == 1) {
+    // Only (re)start if frame is stable for ≥15s
+    if (isStillEnough) {
+      // Restart: choose/confirm target. You can either:
+      //   - Randomise here and tell Arduino, OR
+      //   - Let Arduino randomise on RST.
+      sendCmd("RST");
+      // Optional: if you want Processing to pick a target cell:
+      // int newTarget = 1 + (int)random(16);
+      // sendCmd("SET_TGT:" + newTarget); // requires Arduino support
+      // After restart we wait for green ball to appear
+      phase = Phase.WAIT_GREEN_THROWN;
+      // prevent spamming while it's still; force a tiny debounce
+      lastChangeTime = millis(); isStillEnough = false;
+    }
+  }
+
+  // Q2: "Has the green ball been thrown?"  == state2==2
+  if (gameState == 2) {
+    if (phase == Phase.WAIT_GREEN_THROWN || phase == Phase.IDLE) {
+      // Allow robot to throw blue ball
+      sendCmd("THR");
+      phase = Phase.WAIT_BLUE_THROWN;
+    }
+  }
+}
+
+// ---------------- Serial from Arduino (optional) --------------
+void serialEvent(Serial p) {
+  String line = p.readStringUntil('\n');
+  if (line == null) return;
+  line = trim(line);
+  if (line.length() == 0) return;
+
+  println("Arduino → " + line);
+
+  // If Arduino notifies "BLUE_LANDED:<cell>" we can force evaluation
+  if (line.startsWith("BLUE_LANDED:")) {
+    int cell = int(parseInt(split(line.substring(12), ':')[0]));
+    blueCell = constrain(cell, 0, 16);
+    if (phase == Phase.WAIT_BLUE_THROWN && blueCell >= 1) {
+      phase = Phase.EVALUATE;
+    }
+  }
+}
+
+// ---------------- Game transitions ----------------
+void evaluateBlueVsTarget() {
+  // We compare BLUE vs RED cells (target = red LED cell)
+  int targetCell = redCell;
+  if (targetCell < 1 || blueCell < 1) {
+    // Not enough info yet; wait
+    return;
+  }
+
+  if (blueCell == targetCell) {
+    println("WIN: blue in same grid as target (" + targetCell + ")");
+    sendCmd("WIN");    // Robot celebrates + celebration audio
+  } else {
+    println("CHEAT: blue at " + blueCell + " ≠ target " + targetCell);
+    sendCmd("CHEAT");  // Move LED to blue's grid + angry audio (Arduino side)
+  }
+  phase = Phase.DONE;
+}
+
+void enterIdle() {
+  phase = Phase.WAIT_GREEN_THROWN;
+  lastCmd = "";
+  lastChangeTime = millis();
+  isStillEnough = false;
+  gameState = redCell = greenCell = blueCell = 0;
+}
+
+// ---------------- Utilities ----------------
+void sendCmd(String cmd) {
+  if (cmd.equals(lastCmd)) return;      // avoid flooding identical commands
+  lastCmd = cmd;
+  myPort.write(cmd + "\n");
+  println("→ Arduino: " + cmd);
+}
