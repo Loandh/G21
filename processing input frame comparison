@@ -1,0 +1,189 @@
+// frame to frame comparison for processing input
+
+import processing.video.*;
+import oscP5.*;
+import netP5.*;
+
+Capture cam;
+OscP5 oscP5;
+NetAddress wekinator;
+
+float blueX = 0, blueY = 0;
+float greenX = 0, greenY = 0;
+float redX = 0, redY = 0;
+
+boolean blueDetected = false;
+boolean greenDetected = false;
+boolean redDetected = false;
+
+// HSV thresholds (adjust as needed)
+float blueHueMin = 210, blueHueMax = 225;
+float greenHueMin = 85, greenHueMax = 140;
+float redHueMin1 = 0, redHueMax1 = 15;
+float redHueMin2 = 340, redHueMax2 = 370;
+float satMin = 80;   // filter out gray
+float valMin = 40;   // filter out dark pixels
+
+// stillness detection 
+PImage prevFrame;
+boolean isStable = false;       // true when scene is considered still
+boolean sentThisStable = false; // avoid re-sending while stable
+
+// tune these:
+float motionThreshold = 0.02;   // % of sampled pixels allowed to change (0.02 = 2%)
+int   stableFramesNeeded = 8;   // consecutive frames under threshold before "stable"
+int   sampleStride = 4;         // check every Nth pixel to reduce CPU cost
+int   stableCounter = 0;        // internal counter
+
+void setup() {
+  size(640, 480);
+
+  // List all available cameras
+  String[] cameras = Capture.list();
+  if (cameras == null || cameras.length == 0) {
+    println("No cameras found!");
+    exit();
+  }
+  println("Available cameras:");
+  for (int i = 0; i < cameras.length; i++)  println(i + ": " + cameras[i]);
+
+  int camIndex = 1;  // <-- Change after you see the list
+  cam = new Capture(this, cameras[camIndex]);
+  cam.start();
+
+  oscP5 = new OscP5(this, 12000);
+  wekinator = new NetAddress("127.0.0.1", 6448);
+
+  textSize(14);
+}
+
+void draw() {
+  if (cam.available()) cam.read();
+  image(cam, 0, 0);
+
+  // 1) Motion estimate
+  float motion = computeMotion();
+
+  // 2) Update stable/unstable state
+  if (motion <= motionThreshold) {
+    stableCounter++;
+    if (stableCounter >= stableFramesNeeded) isStable = true;
+  } else {
+    isStable = false;
+    sentThisStable = false;
+    stableCounter = 0;
+  }
+
+  // 3) Track colors
+  PVector bluePos  = trackColorHSV(blueHueMin, blueHueMax);
+  PVector greenPos = trackColorHSV(greenHueMin, greenHueMax);
+  PVector redPos   = trackColorHSV(redHueMin1, redHueMax1);
+  if (redPos == null) redPos = trackColorHSV(redHueMin2, redHueMax2);
+
+  // 4) Draw markers + normalize coords
+  if (bluePos != null) {
+    blueDetected = true;
+    fill(0, 0, 255); noStroke();
+    ellipse(bluePos.x, bluePos.y, 25, 25);
+    blueX = bluePos.x / width; blueY = bluePos.y / height;
+  } else { blueDetected = false; blueX = 0; blueY = 0; }
+
+  if (greenPos != null) {
+    greenDetected = true;
+    fill(0, 255, 0); noStroke();
+    ellipse(greenPos.x, greenPos.y, 25, 25);
+    greenX = greenPos.x / width; greenY = greenPos.y / height;
+  } else { greenDetected = false; greenX = 0; greenY = 0; }
+
+  if (redPos != null) {
+    redDetected = true;
+    fill(255, 0, 0); noStroke();
+    ellipse(redPos.x, redPos.y, 25, 25);
+    redX = redPos.x / width; redY = redPos.y / height;
+  } else { redDetected = false; redX = 0; redY = 0; }
+
+  // 5) Send OSC once when stable
+  if (isStable && !sentThisStable) {
+    OscMessage msg = new OscMessage("/wek/inputs");
+    msg.add(blueX);  msg.add(blueY);
+    msg.add(greenX); msg.add(greenY);
+    msg.add(redX);   msg.add(redY);
+    oscP5.send(msg, wekinator);
+    sentThisStable = true;
+  }
+
+  // 6) Debug overlay
+  fill(0,150); noStroke();
+  rect(8, 8, 310, 78);
+  fill(255);
+  text("Motion: " + nf(motion*100,1,2) + "%  thr: " + (motionThreshold*100) + "%", 14, 24);
+  text("Stable: " + isStable + "  frames: " + stableCounter + "/" + stableFramesNeeded, 14, 44);
+  text("B:" + blueDetected + " (" + nf(blueX,1,2)+","+nf(blueY,1,2)+")  "
+     + "G:" + greenDetected + " (" + nf(greenX,1,2)+","+nf(greenY,1,2)+")  "
+     + "R:" + redDetected + " (" + nf(redX,1,2)+","+nf(redY,1,2)+")", 14, 64);
+}
+
+// --- Motion via frame differencing ---
+float computeMotion() {
+  if (cam.width == 0 || cam.height == 0) return 1.0; // treat as motion until we have a frame
+
+  cam.loadPixels();
+
+  // Initialize / resize prevFrame to camera size and seed it with current frame
+  if (prevFrame == null || prevFrame.width != cam.width || prevFrame.height != cam.height) {
+    prevFrame = createImage(cam.width, cam.height, RGB);
+    prevFrame.copy(cam, 0, 0, cam.width, cam.height, 0, 0, cam.width, cam.height);
+    prevFrame.updatePixels();
+    return 1.0; // first comparison: assume motion
+  }
+
+  prevFrame.loadPixels();
+
+  int changed = 0;
+  int total = 0;
+
+  for (int y = 0; y < cam.height; y += sampleStride) {
+    int row = y * cam.width;
+    for (int x = 0; x < cam.width; x += sampleStride) {
+      int i = row + x;
+      float b1 = brightness(cam.pixels[i]);
+      float b0 = brightness(prevFrame.pixels[i]);
+      if (abs(b1 - b0) > 10) changed++; // tweak 10 for sensitivity
+      total++;
+    }
+  }
+
+  // update prevFrame for next call
+  prevFrame.copy(cam, 0, 0, cam.width, cam.height, 0, 0, cam.width, cam.height);
+  prevFrame.updatePixels();
+
+  return (total == 0) ? 0 : (float)changed / (float)total;
+}
+
+// --- HSV tracking function ---
+PVector trackColorHSV(float hueMin, float hueMax) {
+  if (cam.width == 0) return null;
+  cam.loadPixels();
+  float sumX = 0, sumY = 0;
+  int count = 0;
+
+  for (int i = 0; i < cam.pixels.length; i += 1) {
+    color c = cam.pixels[i];
+    float h = hue(c);
+    float s = saturation(c);
+    float v = brightness(c);
+
+    boolean inBand = (hueMin < hueMax) ? (h >= hueMin && h <= hueMax)
+                                       : (h >= hueMin || h <= hueMax);
+
+    if (inBand && s > satMin && v > valMin) {
+      int x = i % cam.width;
+      int y = i / cam.width;
+      sumX += x; sumY += y;
+      count++;
+    }
+  }
+
+  if (count > 0) return new PVector(sumX / count, sumY / count);
+  return null;
+}
