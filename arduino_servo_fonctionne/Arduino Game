@@ -1,0 +1,83 @@
+#include <Servo.h>
+
+Servo myServo;
+
+const int numLEDs = 10;
+int ledPins[numLEDs] = {2, 3, 4, 5, 6, 7, 8, 10, 11, 12};  // Adjust to your wiring
+int currentLED = -1;
+
+void setup() {
+  Serial.begin(9600);
+  myServo.attach(9);  // Servo on pin 9
+  for (int i = 0; i < numLEDs; i++) {
+    pinMode(ledPins[i], OUTPUT);
+    digitalWrite(ledPins[i], LOW);
+  }
+  Serial.println("Arduino ready");
+}
+
+void loop() {
+  if (Serial.available()) {
+    String command = Serial.readStringUntil('\n');
+    command.trim();
+    Serial.print("Received: ");
+    Serial.println(command);
+
+    if (command.equals("RANDOMISE")) {
+      randomiseLED();
+    } 
+    else if (command.equals("SERVO_PLAY")) {
+      servoPlay();
+    } 
+    else if (command.equals("WIN")) {
+      winSequence();
+    } 
+    else if (command.equals("TIE")) {
+      tieSequence();
+    } 
+    else if (command.startsWith("LED:")) {
+      int ledIndex = command.substring(4).toInt() - 1;
+      lightLED(ledIndex);
+    }
+  }
+}
+
+// ==== Functions ====
+void randomiseLED() {
+  int newLED = random(numLEDs);
+  lightLED(newLED);
+  Serial.print("Randomised LED: ");
+  Serial.println(newLED + 1);
+}
+
+void servoPlay() {
+  Serial.println("Servo play triggered!");
+  myServo.write(90);
+  delay(1000);
+  myServo.write(0);
+}
+
+void winSequence() {
+  Serial.println("WIN sequence!");
+  for (int i = 0; i < numLEDs; i++) {
+    digitalWrite(ledPins[i], HIGH);
+    delay(100);
+    digitalWrite(ledPins[i], LOW);
+  }
+}
+
+void tieSequence() {
+  Serial.println("TIE sequence!");
+  for (int i = 0; i < 3; i++) {
+    for (int j = 0; j < numLEDs; j++) digitalWrite(ledPins[j], HIGH);
+    delay(200);
+    for (int j = 0; j < numLEDs; j++) digitalWrite(ledPins[j], LOW);
+    delay(200);
+  }
+}
+
+void lightLED(int index) {
+  if (index < 0 || index >= numLEDs) return;
+  for (int i = 0; i < numLEDs; i++) digitalWrite(ledPins[i], LOW);
+  digitalWrite(ledPins[index], HIGH);
+}
