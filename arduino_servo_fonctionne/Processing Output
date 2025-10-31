@@ -1,0 +1,89 @@
+// ==== Libraries ====
+import oscP5.*;
+import netP5.*;
+import processing.serial.*;
+
+// ==== OSC and Serial ====
+OscP5 oscP5;
+Serial myPort;
+
+// ==== Variables from Wekinator ====
+int gameState = 0;
+int target = 0;
+int green = 0;
+int blue = 0;
+
+// ==== State tracking ====
+int lastGameState = -1;
+boolean messageSent = false;
+
+void setup() {
+  size(500, 200);
+  // ---- OSC Setup ----
+  oscP5 = new OscP5(this, 12000);  // Must match Wekinator output port
+  println("Listening for OSC on port 12000...");
+
+  // ---- Serial Setup ----
+  printArray(Serial.list());
+  myPort = new Serial(this, Serial.list()[0], 9600);  // Adjust index if needed
+  myPort.clear();
+  println("Connected to Arduino on " + Serial.list()[0]);
+}
+
+void draw() {
+  background(0);
+  fill(255);
+  textSize(16);
+  text("GameState: " + gameState, 20, 40);
+  text("Target: " + target, 20, 70);
+  text("Green: " + green, 20, 100);
+  text("Blue: " + blue, 20, 130);
+
+  // ---- GAME LOGIC ----
+  if (gameState == 1 && lastGameState != 1) {
+    sendToArduino("RANDOMISE");
+    messageSent = true;
+  }
+
+  if (gameState == 2 && lastGameState != 2) {
+    sendToArduino("SERVO_PLAY");
+    messageSent = true;
+  }
+
+  // ---- Comparison logic ----
+  if (target > 0 && green > 0 && blue > 0) {
+    if (target == green && green == blue) {
+      println("There is a tie, the game must restart");
+      sendToArduino("TIE");
+    } 
+    else if (target == blue && blue != green) {
+      println("Blue has won!");
+      sendToArduino("WIN");
+    } 
+    else if (target == green && blue != green) {
+      println("Blue lost, light LED " + blue);
+      sendToArduino("LED:" + blue);
+    }
+  }
+
+  lastGameState = gameState;
+}
+
+// ==== Receive from Wekinator ====
+void oscEvent(OscMessage msg) {
+  if (msg.checkAddrPattern("/wek/outputs")) {
+    if (msg.typetag().length() >= 4) {
+      gameState = int(msg.get(0).floatValue());
+      target = int(msg.get(1).floatValue());
+      green = int(msg.get(2).floatValue());
+      blue = int(msg.get(3).floatValue());
+      println("Wekinator -> GameState:" + gameState + " Target:" + target + " Green:" + green + " Blue:" + blue);
+    }
+  }
+}
+
+// ==== Send to Arduino ====
+void sendToArduino(String command) {
+  myPort.write(command + "\n");
+  println("→ Sent to Arduino: " + command);
+}
