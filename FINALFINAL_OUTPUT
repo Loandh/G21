@@ -1,0 +1,45 @@
+import oscP5.*;
+import netP5.*;
+import processing.serial.*;
+
+OscP5 oscP5;
+Serial myPort;
+
+float output1 = 0;
+float output2 = 0;
+float output3 = 0;
+
+void setup() {
+  size(200,200);
+  oscP5 = new OscP5(this, 12020);
+  
+  println(Serial.list());
+  myPort = new Serial(this, Serial.list()[0], 9600);
+  myPort.clear();
+}
+
+void draw() {
+  background(0);
+  fill(255);
+  textAlign(CENTER, CENTER);
+  text("Receiving from Wekinator and Sending to Arduino", width/2, height/2);
+  text("GameState: " + output1, width/2, height/2 + 10);
+  text("Target: " + output2, width/2, height/2 + 30);
+  text("GreenBall: " + output3, width/2, height/2 + 50);
+}
+
+//Wekinator sends an OSC message
+void oscEvent(OscMessage m) {
+  println("Received OSC: " + m.addrPattern() + " - " + m.typetag());
+  for (int i = 0; i < m.typetag().length(); i++) {
+    println("Output " + i + ": " + m.get(i).floatValue());
+  }
+  output1 = m.get(0).floatValue();
+  output2= m.get(1).floatValue();
+  output3 = m.get(2).floatValue();
+    
+    String message = int(output1) + " " + int(output2) + " " + int(output3)+ "\n";
+    myPort.write(message);
+    println("sent to Arduino" + message.trim());
+  
+}
