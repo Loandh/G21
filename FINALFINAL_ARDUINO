@@ -1,18 +1,42 @@
 #include <Servo.h>
 
 Servo myservo;
-const int numLEDs = 10;
-int ledPins[numLEDs] = {2, 3, 4, 5, 6, 7, 8, 10, 11, 12};
 
-int GameState, TargetLED, GreenBall, BlueBall;
-int LastGame = 0;
+const int numLEDs = 8;
+// Using pins 2–8, 10, 11 (servo uses 9)
+int ledPins[numLEDs] = {2, 3, 4, 5, 6, 7, 8, 10};
+
+int TargetLED = 0;
+int GreenBall = 11; // 11 = no ball
+int BlueBall  = 11;
+
 int LastTarget = 0;
-int LastGreen = 0;
-int LastBlue = 0;
+int LastGreen  = 11;
+int LastBlue   = 11;
 
 bool hasThrown = false;
+bool targetSetThisIdle = false;
 
+// Track which LED is currently the target (so we can blink just that one)
+int currentTargetIdx = -1;
 
+// ---------- STATE MACHINE ----------
+enum State { IDLE, ROUND_ACTIVE, PRE_WIN, WINNING };
+State GameState = IDLE;
+
+// Win animation (non-blocking)
+unsigned long winLastToggleMs = 0;
+const unsigned long winBlinkPeriodMs = 200;
+bool winOn = false;
+
+// PRE-WIN blink (non-blocking)  << NEW
+unsigned long preWinStartMs = 0;
+unsigned long preWinLastToggleMs = 0;
+const unsigned long preWinTotalMs = 800;   // total duration of pre-win blink
+const unsigned long preWinPeriodMs = 120;  // blink speed
+bool preWinOn = false;
+
+// ---------------- SETUP ----------------
 void setup() {
   Serial.begin(9600);
 
@@ -27,66 +51,115 @@ void setup() {
   Serial.println("Arduino ready");
 }
 
+// ---------------- LOOP ----------------
 void loop() {
   if (Serial.available()) {
     String data = Serial.readStringUntil('\n');
     data.trim();
 
     if (data.length() > 0) {
-      int values[3];
-      int index = 0;
-      char *token = strtok((char *)data.c_str(), " ");
-      while (token != NULL && index < 4) {
-        values[index++] = atoi(token);
-        token = strtok(NULL, " ");
-      }
-
-      if (index == 4) {
-        TargetLED = values[0];
-        GreenBall = values[1];
-        BlueBall = values[2];
-
-        Serial.print("Inputs: ");
-        Serial.print(TargetLED); Serial.print(" ");
-        Serial.print(GreenBall); Serial.print(" ");
-        Serial.println(BlueBall);
+      int t, g, b;
+      if (sscanf(data.c_str(), "%d %d %d", &t, &g, &b) == 3) {
+        TargetLED = t;
+        GreenBall = g;
+        BlueBall  = b;
 
         processInputs();
       }
     }
   }
+
+  if (GameState == PRE_WIN) {
+    runPreWinAnimation();   // << NEW
+  } else if (GameState == WINNING) {
+    runWinAnimation();
+  }
 }
 
 // ---------------- GAME LOGIC ----------------
 void processInputs() {
-  // Game Initiation
-  if (GreenBall == 11 && LastGreen != 11) { //No green ball played yet
-    randomiseLEDs();
-    hasThrown = false;  //allow servo to throw everytime 
-  }
-  LastGreen = GreenBall; 
+  bool greenPresentNow = (GreenBall != 11);
+  bool greenWasPresent = (LastGreen  != 11);
+  bool bluePresentNow  = (BlueBall  != 11);
+  bool blueWasPresent  = (LastBlue   != 11);
+  bool idleNow         = (GreenBall == 11 && BlueBall == 11);
+  bool idleWas         = (LastGreen  == 11 && LastBlue  == 11);
 
-    // Servo control
-  if (BlueBall == 11 && LastBlue != 11 && GreenBall != 11 && !hasThrown) { //No blue ball played yet and green ball has not been thrown yet
+  // ---------- PRE-WIN OVERRIDE ----------  << NEW
+  if (GameState == PRE_WIN) {
+    // If field becomes empty during pre-win, cancel and go idle + randomise once
+    if (idleNow) {
+      allLEDsOff();
+      GameState = IDLE;
+      hasThrown = false;
+      randomiseLEDsOnceForIdle();
+    }
+    // If the win condition is no longer valid, cancel pre-win and resume round
+    else if (!(bluePresentNow && (BlueBall == TargetLED))) {
+      // restore steady target LED
+      lightCurrentTargetOnly();
+      GameState = ROUND_ACTIVE;
+    }
+
+    LastTarget = TargetLED;
+    LastGreen  = GreenBall;
+    LastBlue   = BlueBall;
+    return;
+  }
+
+  // ---------- WINNING OVERRIDE ----------
+  if (GameState == WINNING) {
+    if (idleNow) {
+      allLEDsOff();
+      GameState = IDLE;
+      hasThrown = false;
+      randomiseLEDsOnceForIdle();
+    }
+    LastTarget = TargetLED;
+    LastGreen  = GreenBall;
+    LastBlue   = BlueBall;
+    return;
+  }
+
+  // ---------- IDLE RANDOMISATION (once per empty period) ----------
+  if (idleNow && !idleWas && !targetSetThisIdle) {
+    randomiseLEDs();
+    targetSetThisIdle = true;
+    GameState = IDLE;
+    hasThrown = false;
+  }
+
+  // ---------- NORMAL FLOW (IDLE / ROUND_ACTIVE) ----------
+  if (greenPresentNow && !greenWasPresent) {
+    targetSetThisIdle = false;   // allow next empty period to randomise again
+    GameState = ROUND_ACTIVE;
+  }
+
+  // Servo throws when blue appears after green (once per round)
+  if (bluePresentNow && !blueWasPresent && greenPresentNow && !hasThrown) {
     if (TargetLED == 3 || TargetLED == 4 || TargetLED == 5 || TargetLED == 6) {
       servoThrow(40);
     } else if (TargetLED == 7 || TargetLED == 8 || TargetLED == 9 || TargetLED == 10) {
       servoThrow(90);
     }
-  }
-  LastBlue = BlueBall;
-
-  // Game Playing
-  if (BlueBall == GreenBall && BlueBall != 11) {  // Tie
-    allLEDsOn();
-  }
-  else if (TargetLED == BlueBall && BlueBall != GreenBall) {  // Blue wins
-    WinSequence();
-  }
-  else if (TargetLED != BlueBall && GreenBall != BlueBall) {  // Cheating case
-    randomiseLEDs();
+    hasThrown = true;
   }
 
+  // Resolve once blue is present
+  if (bluePresentNow) {
+    if (BlueBall == GreenBall) {
+      allLEDsOn(); // tie (optional)
+    } else if (TargetLED == BlueBall) {
+      // << CHANGE: Start PRE-WIN instead of WINNING directly
+      startPreWin();          // << NEW
+    } else if (GreenBall != BlueBall) {
+      randomiseLEDs();
+    }
+  }
+
+  LastTarget = TargetLED;
+  LastGreen  = GreenBall;
+  LastBlue   = BlueBall;
 }
 
 // ---------------- FUNCTIONS ----------------
@@ -98,9 +171,21 @@ void servoThrow(int angle) {
 
 void randomiseLEDs() {
   allLEDsOff();
-  int led = random(0, numLEDs);
-  digitalWrite(ledPins[led], HIGH);
-  delay(10000);
+  int idx = random(0, numLEDs); // [0, numLEDs-1]
+  currentTargetIdx = idx;       // track which LED is the target
+  digitalWrite(ledPins[idx], HIGH);
+}
+
+void randomiseLEDsOnceForIdle() { // helper to keep the "once-per-idle" rule
+  randomiseLEDs();
+  targetSetThisIdle = true;
+}
+
+void lightCurrentTargetOnly() {
+  if (currentTargetIdx >= 0 && currentTargetIdx < numLEDs) {
+    allLEDsOff();
+    digitalWrite(ledPins[currentTargetIdx], HIGH);
+  }
 }
 
 void allLEDsOn() {
@@ -115,21 +200,55 @@ void allLEDsOff() {
   }
 }
 
-void flash() {
-  int flashrandom = random(0, numLEDs);
-  digitalWrite(ledPins[flashrandom], HIGH);
-  delay(200);
-  digitalWrite(ledPins[flashrandom], LOW);
-  delay(100);
+// ---------- PRE-WIN (blink target LED briefly) ----------  << NEW
+void startPreWin() {
+  GameState = PRE_WIN;
+  preWinStartMs = millis();
+  preWinLastToggleMs = preWinStartMs - preWinPeriodMs; // force immediate toggle
+  preWinOn = false;
 }
 
-void WinSequence() {
-  allLEDsOff();
-  delay(200);
-  for (int i = 0; i < numLEDs; i++) {
-    digitalWrite(ledPins[i], HIGH);
-    delay(300);
-    digitalWrite(ledPins[i], LOW);
+void runPreWinAnimation() {
+  unsigned long now = millis();
+
+  // Time-boxed pre-win phase
+  if (now - preWinStartMs >= preWinTotalMs) {
+    // Ensure target LED is on at handoff
+    lightCurrentTargetOnly();
+    startWinAnimation();
+    return;
+  }
+
+  if (now - preWinLastToggleMs >= preWinPeriodMs) {
+    preWinLastToggleMs = now;
+    preWinOn = !preWinOn;
+
+    if (preWinOn) {
+      // Blink just the target LED
+      lightCurrentTargetOnly();
+    } else {
+      allLEDsOff();
+    }
+  }
+}
+
+// ---------- WIN ANIMATION (non-blocking + overriding) ----------
+void startWinAnimation() {
+  GameState = WINNING;
+  winOn = false;
+  winLastToggleMs = 0; // forces immediate toggle on first run
+}
+
+void runWinAnimation() {
+  unsigned long now = millis();
+  if (now - winLastToggleMs >= winBlinkPeriodMs) {
+    winLastToggleMs = now;
+    winOn = !winOn;
+    if (winOn) {
+      allLEDsOn();
+    } else {
+      allLEDsOff();
+    }
   }
 }
 
