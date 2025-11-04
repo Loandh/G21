@@ -1,0 +1,135 @@
+#include <Servo.h>
+
+Servo myservo;
+const int numLEDs = 10;
+int ledPins[numLEDs] = {2, 3, 4, 5, 6, 7, 8, 10, 11, 12};
+
+int GameState, TargetLED, GreenBall, BlueBall;
+int LastGame = 0;
+int LastTarget = 0;
+int LastGreen = 0;
+int LastBlue = 0;
+
+bool hasThrown = false;
+
+
+void setup() {
+  Serial.begin(9600);
+
+  for (int i = 0; i < numLEDs; i++) {
+    pinMode(ledPins[i], OUTPUT);
+    digitalWrite(ledPins[i], LOW);
+  }
+
+  myservo.attach(9);
+  myservo.write(0);
+
+  Serial.println("Arduino ready");
+}
+
+void loop() {
+  if (Serial.available()) {
+    String data = Serial.readStringUntil('\n');
+    data.trim();
+
+    if (data.length() > 0) {
+      int values[3];
+      int index = 0;
+      char *token = strtok((char *)data.c_str(), " ");
+      while (token != NULL && index < 4) {
+        values[index++] = atoi(token);
+        token = strtok(NULL, " ");
+      }
+
+      if (index == 4) {
+        TargetLED = values[0];
+        GreenBall = values[1];
+        BlueBall = values[2];
+
+        Serial.print("Inputs: ");
+        Serial.print(TargetLED); Serial.print(" ");
+        Serial.print(GreenBall); Serial.print(" ");
+        Serial.println(BlueBall);
+
+        processInputs();
+      }
+    }
+  }
+}
+
+// ---------------- GAME LOGIC ----------------
+void processInputs() {
+  // Game Initiation
+  if (GreenBall == 11 && LastGreen != 11) { //No green ball played yet
+    randomiseLEDs();
+    hasThrown = false;  //allow servo to throw everytime 
+  }
+  LastGreen = GreenBall; 
+
+    // Servo control
+  if (BlueBall == 11 && LastBlue != 11 && GreenBall != 11 && !hasThrown) { //No blue ball played yet and green ball has not been thrown yet
+    if (TargetLED == 3 || TargetLED == 4 || TargetLED == 5 || TargetLED == 6) {
+      servoThrow(40);
+    } else if (TargetLED == 7 || TargetLED == 8 || TargetLED == 9 || TargetLED == 10) {
+      servoThrow(90);
+    }
+  }
+  LastBlue = BlueBall;
+
+  // Game Playing
+  if (BlueBall == GreenBall && BlueBall != 11) {  // Tie
+    allLEDsOn();
+  }
+  else if (TargetLED == BlueBall && BlueBall != GreenBall) {  // Blue wins
+    WinSequence();
+  }
+  else if (TargetLED != BlueBall && GreenBall != BlueBall) {  // Cheating case
+    randomiseLEDs();
+  }
+
+}
+
+// ---------------- FUNCTIONS ----------------
+void servoThrow(int angle) {
+  myservo.write(angle);
+  delay(500);
+  myservo.write(0);
+}
+
+void randomiseLEDs() {
+  allLEDsOff();
+  int led = random(0, numLEDs);
+  digitalWrite(ledPins[led], HIGH);
+  delay(10000);
+}
+
+void allLEDsOn() {
+  for (int i = 0; i < numLEDs; i++) {
+    digitalWrite(ledPins[i], HIGH);
+  }
+}
+
+void allLEDsOff() {
+  for (int i = 0; i < numLEDs; i++) {
+    digitalWrite(ledPins[i], LOW);
+  }
+}
+
+void flash() {
+  int flashrandom = random(0, numLEDs);
+  digitalWrite(ledPins[flashrandom], HIGH);
+  delay(200);
+  digitalWrite(ledPins[flashrandom], LOW);
+  delay(100);
+}
+
+void WinSequence() {
+  allLEDsOff();
+  delay(200);
+  for (int i = 0; i < numLEDs; i++) {
+    digitalWrite(ledPins[i], HIGH);
+    delay(300);
+    digitalWrite(ledPins[i], LOW);
+  }
+}
+
